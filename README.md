@@ -3,6 +3,9 @@
 Kalkulator patungan buat nongkrong, tugas kelompok, atau liburan bareng: catat siapa bayar apa, lalu keluar hitungan **siapa transfer ke siapa berapa**, dengan jumlah transaksi sesedikit mungkin.
 
 Dibuat tanpa login dan tanpa install: langsung jalan di browser, gratis.
+## Live demo
+
+Coba langsung di browser: [weinssy.github.io/split-bill-kelompok](https://weinssy.github.io/split-bill-kelompok/)
 
 ## Fitur
 
