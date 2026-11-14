@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Split Bill Kelompok: Kalkulator Patungan</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <main class="container">
+    <header>
+      <h1>Split Bill Kelompok</h1>
+      <p class="tagline">Catat siapa bayar apa, keluar hitungan siapa transfer ke siapa.</p>
+    </header>
+
+    <section class="card" aria-label="Peserta">
+      <h2>Peserta</h2>
+      <form id="personForm" class="inline-form">
+        <label class="sr-only" for="personName">Nama peserta</label>
+        <input id="personName" type="text" placeholder="Nama peserta, mis. Andi" required />
+        <button type="submit">Tambah</button>
+      </form>
+      <ul id="personList" class="chip-list"></ul>
+      <p id="personEmpty" class="empty">Belum ada peserta. Tambahkan minimal 2 orang.</p>
+    </section>
+
+    <section class="card" aria-label="Pengeluaran">
+      <h2>Pengeluaran</h2>
+      <form id="expenseForm" class="expense-form">
+        <label class="field-label">Untuk apa
+          <input id="expenseDesc" type="text" placeholder="mis. Makan siang" required />
+        </label>
+        <label class="field-label">Jumlah (Rp)
+          <input id="expenseAmount" type="number" placeholder="mis. 150000" min="1" step="1" required />
+        </label>
+        <label class="field-label">Dibayar oleh
+          <select id="expensePayer"></select>
+        </label>
+        <fieldset class="split-field">
+          <legend>Dibagi untuk (centang yang ikut patungan)</legend>
+          <div id="splitList" class="split-list"></div>
+        </fieldset>
+        <p id="expenseError" class="error" role="alert"></p>
+        <button type="submit">Tambah pengeluaran</button>
+      </form>
+      <ul id="expenseList" class="expense-list"></ul>
+      <p id="expenseEmpty" class="empty">Belum ada pengeluaran.</p>
+    </section>
+
+    <section class="card" aria-label="Hasil hitungan">
+      <h2>Siapa Transfer ke Siapa</h2>
+      <p class="total-line">Total pengeluaran: <strong id="totalAmount">Rp0</strong></p>
+      <ul id="balanceList" class="balance-list"></ul>
+      <ul id="settlementList" class="settlement-list"></ul>
+      <p id="settlementEmpty" class="empty">Belum ada hitungan. Tambah peserta dan pengeluaran dulu.</p>
+      <button id="btnCopy" type="button">Salin ringkasan untuk WhatsApp</button>
+      <p id="copyStatus" class="copy-status"></p>
+    </section>
+
+    <footer>
+      <small>Data tersimpan di browser ini (localStorage), jadi refresh halaman tidak menghapus hitungan.</small>
+    </footer>
+  </main>
+
+  <script src="script.js"></script>
+</body>
+</html>
