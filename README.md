@@ -3,18 +3,21 @@
 Kalkulator patungan buat nongkrong, tugas kelompok, atau liburan bareng: catat siapa bayar apa, lalu keluar hitungan **siapa transfer ke siapa berapa**, dengan jumlah transaksi sesedikit mungkin.
 
 Dibuat tanpa login dan tanpa install: langsung jalan di browser, gratis.
+
 ## Live demo
 
 Coba langsung di browser: [weinssy.github.io/split-bill-kelompok](https://weinssy.github.io/split-bill-kelompok/)
 
 ## Fitur
 
-- Tambah/hapus peserta patungan
-- Catat pengeluaran: nama, jumlah, siapa yang membayar, dan **pilih siapa saja yang ikut dibagi** (tidak harus semua orang)
-- Saldo per orang: siapa kelebihan bayar, siapa kurang bayar
+- Tambah/hapus peserta patungan (nama duplikat ditolak, hapus peserta meminta konfirmasi dulu karena pengeluaran yang menyangkut dia ikut terhapus)
+- Catat pengeluaran: nama, jumlah (otomatis terformat pemisah ribuan saat mengetik), siapa yang membayar, dan **pilih siapa saja yang ikut dibagi** (tidak harus semua orang). Pilihan centang tidak ter-reset saat halaman digambar ulang
+- **Edit pengeluaran** yang salah ketik, tanpa harus hapus dan input ulang
+- Rincian per orang: sudah bayar berapa, jatah berapa, dan statusnya (kelebihan, kurang, atau lunas). Peserta bersaldo nol tetap ditampilkan
 - **Penyelesaian otomatis**: algoritma greedy mencocokkan penyeimbang terbesar lebih dulu, jadi jumlah transfer seminimal mungkin
-- Tombol **salin ringkasan** siap tempel ke WhatsApp
-- Data tersimpan di browser (localStorage), jadi refresh halaman tidak menghilangkan hitungan
+- Tombol **salin ringkasan** siap tempel ke WhatsApp, isinya lengkap: daftar pengeluaran, rincian per orang, dan daftar transfer
+- **Cetak nota** hasil hitungan seperti struk, atau **unduh ringkasan** sebagai berkas teks
+- Data tersimpan di browser (localStorage), jadi refresh halaman tidak menghilangkan hitungan. Kalau data tersimpan rusak, aplikasi memperingatkan dan menawarkan penghapusan data rusak, bukan mati diam-diam
 - Format uang Rupiah yang rapi, angka selalu rata digit seperti cetakan struk
 
 ## Cara pakai

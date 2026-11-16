@@ -13,6 +13,11 @@
       <p class="tagline">Catat siapa bayar apa, keluar hitungan siapa transfer ke siapa.</p>
     </header>
 
+    <div id="dataWarning" class="data-warning" role="alert" hidden>
+      <p>Data tersimpan di browser ini rusak dan tidak bisa dibaca, jadi aplikasi mulai dari kosong. Data rusak itu masih tersimpan sampai kamu menghapusnya.</p>
+      <button id="btnClearCorrupt" type="button">Hapus data rusak</button>
+    </div>
+
     <section class="card" aria-label="Peserta">
       <h2>Peserta</h2>
       <form id="personForm" class="inline-form">
@@ -20,6 +25,7 @@
         <input id="personName" type="text" placeholder="Nama peserta, mis. Andi" required />
         <button type="submit">Tambah</button>
       </form>
+      <p id="personError" class="error" role="alert"></p>
       <ul id="personList" class="chip-list"></ul>
       <p id="personEmpty" class="empty">Belum ada peserta. Tambahkan minimal 2 orang.</p>
     </section>
@@ -31,7 +37,7 @@
           <input id="expenseDesc" type="text" placeholder="mis. Makan siang" required />
         </label>
         <label class="field-label">Jumlah (Rp)
-          <input id="expenseAmount" type="number" placeholder="mis. 150000" min="1" step="1" required />
+          <input id="expenseAmount" type="text" inputmode="numeric" placeholder="mis. 150.000" required />
         </label>
         <label class="field-label">Dibayar oleh
           <select id="expensePayer"></select>
@@ -41,7 +47,10 @@
           <div id="splitList" class="split-list"></div>
         </fieldset>
         <p id="expenseError" class="error" role="alert"></p>
-        <button type="submit">Tambah pengeluaran</button>
+        <div class="form-actions">
+          <button id="expenseSubmit" type="submit">Tambah pengeluaran</button>
+          <button id="expenseCancel" type="button" hidden>Batal edit</button>
+        </div>
       </form>
       <ul id="expenseList" class="expense-list"></ul>
       <p id="expenseEmpty" class="empty">Belum ada pengeluaran.</p>
@@ -54,6 +63,10 @@
       <ul id="settlementList" class="settlement-list"></ul>
       <p id="settlementEmpty" class="empty">Belum ada hitungan. Tambah peserta dan pengeluaran dulu.</p>
       <button id="btnCopy" type="button">Salin ringkasan untuk WhatsApp</button>
+      <div class="result-actions">
+        <button id="btnPrint" class="btn-secondary" type="button">Cetak nota</button>
+        <button id="btnDownload" class="btn-secondary" type="button">Unduh ringkasan</button>
+      </div>
       <p id="copyStatus" class="copy-status"></p>
     </section>
 

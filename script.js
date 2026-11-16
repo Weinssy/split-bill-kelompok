@@ -1,5 +1,6 @@
-// Logika inti (splitAmount, computeBalances, computeSettlements) tidak menyentuh
-// DOM supaya bisa diuji langsung di Node. Lihat module.exports di bawah.
+// Logika inti (splitAmount, computeBalances, computeSettlements, computeDetails)
+// tidak menyentuh DOM supaya bisa diuji langsung di Node. Lihat module.exports
+// di bawah.
 
 // Bagi amount rata ke count orang dalam rupiah bulat. Sisa pembagian diberikan
 // 1 rupiah ke orang-orang pertama supaya total bagian selalu sama dengan amount.
@@ -27,6 +28,31 @@ function computeBalances(people, expenses) {
     });
   }
   return balances;
+}
+
+// Rincian per orang: berapa yang sudah dia bayar, berapa jatah yang dia
+// tanggung, dan saldonya (bayar - jatah). Konsisten dengan computeBalances.
+function computeDetails(people, expenses) {
+  const details = {};
+  for (const person of people) {
+    details[person.id] = { id: person.id, name: person.name, paid: 0, share: 0, balance: 0 };
+  }
+
+  for (const expense of expenses) {
+    if (!(expense.payerId in details)) continue;
+    details[expense.payerId].paid += expense.amount;
+
+    const targets = expense.splitIds.filter((id) => id in details);
+    if (targets.length === 0) continue;
+    const shares = splitAmount(expense.amount, targets.length);
+    targets.forEach((id, i) => {
+      details[id].share += shares[i];
+    });
+  }
+  for (const person of people) {
+    details[person.id].balance = details[person.id].paid - details[person.id].share;
+  }
+  return details;
 }
 
 // Pasangkan penyeimbang terbesar lebih dulu (greedy) supaya jumlah transfer sedikit.
@@ -63,26 +89,89 @@ function computeSettlements(people, balances) {
   return settlements;
 }
 
+// Kelompokkan digit dengan titik pemisah ribuan, gaya Indonesia.
+// Menerima string digit atau angka, mengembalikan string terformat.
+function groupThousands(value) {
+  const digits = String(value).replace(/\D/g, "");
+  return digits.replace(/\B(?=(\d{3})+(?!\d))/g, ".");
+}
+
+// Ambil angka murni dari teks input jumlah (titik dan karakter lain dibuang).
+function parseAmountInput(text) {
+  const digits = String(text).replace(/\D/g, "");
+  return digits ? Number(digits) : 0;
+}
+
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { splitAmount, computeBalances, computeSettlements };
+  module.exports = {
+    splitAmount,
+    computeBalances,
+    computeSettlements,
+    computeDetails,
+    groupThousands,
+    parseAmountInput,
+  };
 }
 
 if (typeof document !== "undefined") {
   const PEOPLE_KEY = "sb_people";
   const EXPENSES_KEY = "sb_expenses";
-  let people = JSON.parse(localStorage.getItem(PEOPLE_KEY) || "[]");
-  let expenses = JSON.parse(localStorage.getItem(EXPENSES_KEY) || "[]");
+
+  // Baca array dari localStorage dengan pengaman. JSON rusak atau bentuk data
+  // yang salah tidak boleh mematikan aplikasi: tandai sebagai rusak supaya UI
+  // bisa memperingatkan pengguna dan menawarkan pemulihan.
+  function loadArray(key) {
+    try {
+      const raw = localStorage.getItem(key);
+      if (raw === null) return { data: [], corrupted: false };
+      const parsed = JSON.parse(raw);
+      if (!Array.isArray(parsed)) return { data: [], corrupted: true };
+      return { data: parsed, corrupted: false };
+    } catch {
+      return { data: [], corrupted: true };
+    }
+  }
+
+  const loadedPeople = loadArray(PEOPLE_KEY);
+  const loadedExpenses = loadArray(EXPENSES_KEY);
+  let people = loadedPeople.data;
+  let expenses = loadedExpenses.data;
+  let dataCorrupted = loadedPeople.corrupted || loadedExpenses.corrupted;
+
+  // Status centang "dibagi untuk" disimpan di state, bukan dibaca dari DOM,
+  // supaya render ulang tidak membuang pilihan pengguna. Peserta yang sudah
+  // ada dan peserta baru mulai dalam keadaan tercentang.
+  let splitChecked = new Set(people.map((p) => p.id));
+  // Id pengeluaran yang sedang diedit, atau null saat form dalam mode tambah.
+  let editingId = null;
+  // Salinan status centang sebelum masuk mode edit, untuk tombol Batal.
+  let splitCheckedBeforeEdit = null;
 
   const el = (id) => document.getElementById(id);
-  const rupiah = (n) =>
-    "Rp" + Math.round(n).toString().replace(/\B(?=(\d{3})+(?!\d))/g, ".");
+  const rupiah = (n) => "Rp" + groupThousands(Math.round(n));
 
   function save() {
     localStorage.setItem(PEOPLE_KEY, JSON.stringify(people));
     localStorage.setItem(EXPENSES_KEY, JSON.stringify(expenses));
+    // Data baru yang barusan disimpan menggantikan data rusak, jadi
+    // peringatan tidak perlu tampil lagi.
+    if (dataCorrupted) {
+      dataCorrupted = false;
+      el("dataWarning").hidden = true;
+    }
+  }
+
+  function exitEditMode() {
+    editingId = null;
+    splitCheckedBeforeEdit = null;
+    el("expenseSubmit").textContent = "Tambah pengeluaran";
+    el("expenseCancel").hidden = true;
+    el("expenseError").textContent = "";
   }
 
   function render() {
+    el("dataWarning").hidden = !dataCorrupted;
+
     const personList = el("personList");
     personList.innerHTML = "";
     el("personEmpty").style.display = people.length ? "none" : "block";
@@ -97,10 +186,23 @@ if (typeof document !== "undefined") {
       del.setAttribute("aria-label", `Hapus peserta ${person.name}`);
       del.title = "Hapus peserta (pengeluaran yang menyangkut dia ikut terhapus)";
       del.addEventListener("click", () => {
+        const affected = expenses.filter(
+          (e) => e.payerId === person.id || e.splitIds.includes(person.id)
+        ).length;
+        const detail =
+          affected > 0
+            ? ` ${affected} pengeluaran yang menyangkut dia juga akan terhapus.`
+            : "";
+        if (!window.confirm(`Hapus peserta ${person.name}?${detail}`)) return;
         people = people.filter((p) => p.id !== person.id);
         expenses = expenses.filter(
           (e) => e.payerId !== person.id && !e.splitIds.includes(person.id)
         );
+        splitChecked.delete(person.id);
+        if (editingId !== null && !expenses.some((e) => e.id === editingId)) {
+          exitEditMode();
+          el("expenseForm").reset();
+        }
         save();
         render();
       });
@@ -109,6 +211,7 @@ if (typeof document !== "undefined") {
     }
 
     const payerSelect = el("expensePayer");
+    const previousPayer = payerSelect.value;
     payerSelect.innerHTML = "";
     for (const person of people) {
       const opt = document.createElement("option");
@@ -116,6 +219,10 @@ if (typeof document !== "undefined") {
       opt.textContent = person.name;
       payerSelect.appendChild(opt);
     }
+    if (people.some((p) => String(p.id) === previousPayer)) {
+      payerSelect.value = previousPayer;
+    }
+
     const splitList = el("splitList");
     splitList.innerHTML = "";
     for (const person of people) {
@@ -123,7 +230,11 @@ if (typeof document !== "undefined") {
       const box = document.createElement("input");
       box.type = "checkbox";
       box.value = person.id;
-      box.checked = true;
+      box.checked = splitChecked.has(person.id);
+      box.addEventListener("change", () => {
+        if (box.checked) splitChecked.add(person.id);
+        else splitChecked.delete(person.id);
+      });
       label.append(box, document.createTextNode(person.name));
       splitList.appendChild(label);
     }
@@ -132,7 +243,8 @@ if (typeof document !== "undefined") {
     expenseList.innerHTML = "";
     el("expenseEmpty").style.display = expenses.length ? "none" : "block";
     const nameOf = (id) => (people.find((p) => p.id === id) || {}).name || "?";
-    for (const expense of expenses) {
+    // Penyimpanan tetap kronologis, tampilan saja yang dibalik: terbaru di atas.
+    for (const expense of [...expenses].reverse()) {
       const li = document.createElement("li");
       li.className = "expense-item";
       const info = document.createElement("div");
@@ -143,16 +255,28 @@ if (typeof document !== "undefined") {
       meta.className = "meta";
       meta.textContent = `Dibayar ${nameOf(expense.payerId)}, dibagi ke ${expense.splitIds.map(nameOf).join(", ")}`;
       info.append(title, meta);
+      const actions = document.createElement("div");
+      actions.className = "expense-actions";
+      const edit = document.createElement("button");
+      edit.type = "button";
+      edit.textContent = "Edit";
+      edit.setAttribute("aria-label", `Edit pengeluaran ${expense.desc}`);
+      edit.addEventListener("click", () => startEdit(expense));
       const del = document.createElement("button");
       del.type = "button";
       del.textContent = "Hapus";
       del.setAttribute("aria-label", `Hapus pengeluaran ${expense.desc}`);
       del.addEventListener("click", () => {
         expenses = expenses.filter((e) => e.id !== expense.id);
+        if (editingId === expense.id) {
+          exitEditMode();
+          el("expenseForm").reset();
+        }
         save();
         render();
       });
-      li.append(info, del);
+      actions.append(edit, del);
+      li.append(info, actions);
       expenseList.appendChild(li);
     }
 
@@ -160,17 +284,31 @@ if (typeof document !== "undefined") {
     el("totalAmount").textContent = rupiah(total);
 
     const balances = computeBalances(people, expenses);
+    const details = computeDetails(people, expenses);
     const balanceList = el("balanceList");
     balanceList.innerHTML = "";
     for (const person of people) {
-      const b = balances[person.id];
-      if (b === 0) continue;
+      const d = details[person.id];
       const li = document.createElement("li");
       li.className = "balance-item";
-      li.innerHTML =
-        b > 0
-          ? `${person.name}: <span class="plus">kelebihan ${rupiah(b)}</span>`
-          : `${person.name}: <span class="minus">kurang ${rupiah(-b)}</span>`;
+      const head = document.createElement("div");
+      head.append(document.createTextNode(`${person.name}: `));
+      const status = document.createElement("span");
+      if (d.balance > 0) {
+        status.className = "plus";
+        status.textContent = `kelebihan ${rupiah(d.balance)}`;
+      } else if (d.balance < 0) {
+        status.className = "minus";
+        status.textContent = `kurang ${rupiah(-d.balance)}`;
+      } else {
+        status.className = "lunas";
+        status.textContent = "lunas";
+      }
+      head.append(status);
+      const meta = document.createElement("div");
+      meta.className = "meta";
+      meta.textContent = `Sudah bayar ${rupiah(d.paid)}, jatah ${rupiah(d.share)}`;
+      li.append(head, meta);
       balanceList.appendChild(li);
     }
 
@@ -184,29 +322,104 @@ if (typeof document !== "undefined") {
       li.textContent = `${s.from} → ${s.to}: ${rupiah(s.amount)}`;
       settlementList.appendChild(li);
     }
-    el("btnCopy").dataset.summary = buildSummary(total, settlements);
+    el("btnCopy").dataset.summary = buildSummary(people, expenses, details, settlements, total);
   }
 
-  function buildSummary(total, settlements) {
-    if (!settlements.length) return "";
-    const lines = settlements.map((s) => `• ${s.from} → ${s.to}: ${rupiah(s.amount)}`);
-    return `Split Bill Kelompok\nTotal: ${rupiah(total)}\n\nSiapa transfer ke siapa:\n${lines.join("\n")}`;
+  function buildSummary(people, expenses, details, settlements, total) {
+    if (!expenses.length) return "";
+    const nameOf = (id) => (people.find((p) => p.id === id) || {}).name || "?";
+    const parts = [`Split Bill Kelompok\nTotal: ${rupiah(total)}`];
+
+    const expenseLines = expenses.map(
+      (e) => `• ${e.desc}: ${rupiah(e.amount)} (dibayar ${nameOf(e.payerId)})`
+    );
+    parts.push(`Pengeluaran:\n${expenseLines.join("\n")}`);
+
+    const detailLines = people.map((p) => {
+      const d = details[p.id];
+      const status =
+        d.balance > 0
+          ? `kelebihan ${rupiah(d.balance)}`
+          : d.balance < 0
+            ? `kurang ${rupiah(-d.balance)}`
+            : "lunas";
+      return `• ${p.name}: bayar ${rupiah(d.paid)}, jatah ${rupiah(d.share)}, ${status}`;
+    });
+    parts.push(`Rincian per orang:\n${detailLines.join("\n")}`);
+
+    if (settlements.length) {
+      const lines = settlements.map((s) => `• ${s.from} → ${s.to}: ${rupiah(s.amount)}`);
+      parts.push(`Siapa transfer ke siapa:\n${lines.join("\n")}`);
+    } else {
+      parts.push("Siapa transfer ke siapa:\nTidak ada, semua sudah lunas.");
+    }
+    return parts.join("\n\n");
   }
+
+  function startEdit(expense) {
+    splitCheckedBeforeEdit = new Set(splitChecked);
+    editingId = expense.id;
+    splitChecked = new Set(expense.splitIds);
+    el("expenseDesc").value = expense.desc;
+    el("expenseAmount").value = groupThousands(expense.amount);
+    el("expenseError").textContent = "";
+    el("expenseSubmit").textContent = "Simpan perubahan";
+    el("expenseCancel").hidden = false;
+    render();
+    el("expensePayer").value = String(expense.payerId);
+    el("expenseDesc").focus();
+  }
+
+  el("btnClearCorrupt").addEventListener("click", () => {
+    localStorage.removeItem(PEOPLE_KEY);
+    localStorage.removeItem(EXPENSES_KEY);
+    people = [];
+    expenses = [];
+    splitChecked = new Set();
+    dataCorrupted = false;
+    exitEditMode();
+    el("expenseForm").reset();
+    el("personForm").reset();
+    render();
+  });
 
   el("personForm").addEventListener("submit", (event) => {
     event.preventDefault();
     const name = el("personName").value.trim();
     if (!name) return;
-    people.push({ id: Date.now(), name });
+    const duplicate = people.some(
+      (p) => p.name.trim().toLowerCase() === name.toLowerCase()
+    );
+    if (duplicate) {
+      el("personError").textContent = `Nama ${name} sudah ada di daftar peserta. Pakai nama yang berbeda.`;
+      return;
+    }
+    el("personError").textContent = "";
+    const person = { id: Date.now(), name };
+    people.push(person);
+    splitChecked.add(person.id);
     save();
     render();
     event.target.reset();
   });
 
+  // Format angka saat mengetik: 1500000 tampil sebagai 1.500.000.
+  el("expenseAmount").addEventListener("input", (event) => {
+    const digits = event.target.value.replace(/\D/g, "");
+    event.target.value = digits ? groupThousands(digits) : "";
+  });
+
+  el("expenseCancel").addEventListener("click", () => {
+    if (splitCheckedBeforeEdit) splitChecked = splitCheckedBeforeEdit;
+    exitEditMode();
+    el("expenseForm").reset();
+    render();
+  });
+
   el("expenseForm").addEventListener("submit", (event) => {
     event.preventDefault();
     const desc = el("expenseDesc").value.trim();
-    const amount = Number(el("expenseAmount").value);
+    const amount = parseAmountInput(el("expenseAmount").value);
     const payerId = Number(el("expensePayer").value);
     const splitIds = [...el("splitList").querySelectorAll("input:checked")].map((b) =>
       Number(b.value)
@@ -220,12 +433,21 @@ if (typeof document !== "undefined") {
       return;
     }
     el("expenseError").textContent = "";
-    expenses.push({ id: Date.now(), desc, amount, payerId, splitIds });
+    if (editingId !== null) {
+      const target = expenses.find((e) => e.id === editingId);
+      if (target) {
+        target.desc = desc;
+        target.amount = amount;
+        target.payerId = payerId;
+        target.splitIds = splitIds;
+      }
+      exitEditMode();
+    } else {
+      expenses.push({ id: Date.now(), desc, amount, payerId, splitIds });
+    }
     save();
-    render();
     event.target.reset();
-    // Form reset mengosongkan centang, jadi centang ulang semua peserta.
-    el("splitList").querySelectorAll("input").forEach((b) => (b.checked = true));
+    render();
   });
 
   el("btnCopy").addEventListener("click", async () => {
@@ -240,6 +462,28 @@ if (typeof document !== "undefined") {
     } catch {
       el("copyStatus").textContent = "Gagal menyalin otomatis. Salin manual dari daftar di atas.";
     }
+  });
+
+  el("btnDownload").addEventListener("click", () => {
+    const summary = el("btnCopy").dataset.summary;
+    if (!summary) {
+      el("copyStatus").textContent = "Belum ada hitungan untuk diunduh.";
+      return;
+    }
+    const blob = new Blob([summary], { type: "text/plain;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = "ringkasan-split-bill.txt";
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(url);
+    el("copyStatus").textContent = "Ringkasan diunduh sebagai berkas teks.";
+  });
+
+  el("btnPrint").addEventListener("click", () => {
+    window.print();
   });
 
   render();

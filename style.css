@@ -63,12 +63,23 @@ button:active { transform: translateY(1px); }
 
 .chip-list { list-style: none; display: flex; flex-wrap: wrap; gap: 8px; padding: 0; margin: 14px 0 0; }
 .chip {
-  display: inline-flex; align-items: center; gap: 8px;
+  display: inline-flex; align-items: center; gap: 4px;
   background: #efe9db; border: 1px solid #ddd5c3; border-radius: 999px;
-  padding: 6px 8px 6px 14px; font-weight: 600;
+  padding: 2px 2px 2px 14px; font-weight: 600;
 }
-.chip button { background: transparent; color: #8a2f23; padding: 2px 6px; font-weight: 700; }
+/* Tanda silang tetap kecil, tapi area sentuhnya minimal 44x44px (R-03). */
+.chip button {
+  background: transparent; color: #8a2f23; font-weight: 700;
+  min-width: 44px; min-height: 44px; padding: 2px 6px;
+  display: inline-flex; align-items: center; justify-content: center;
+}
 .chip button:hover { background: #e3dcc9; }
+
+.data-warning {
+  background: #fff; border: 2px solid #b03a2e; border-radius: 6px;
+  padding: 16px 20px; margin-bottom: 16px;
+}
+.data-warning p { margin: 0 0 10px; }
 
 .expense-form { display: grid; gap: 10px; margin-bottom: 14px; }
 .field-label { display: grid; gap: 6px; font-weight: 600; }
@@ -77,6 +88,13 @@ button:active { transform: translateY(1px); }
 .split-list label { display: inline-flex; gap: 6px; align-items: center; font-weight: 400; }
 
 .error { color: #b03a2e; font-weight: 600; margin: 0; min-height: 1.2em; }
+#personError { margin-top: 8px; min-height: 0; }
+#personError:empty { display: none; }
+
+.form-actions { display: flex; gap: 8px; }
+.form-actions button[type="submit"] { flex: 1; }
+#expenseCancel { background: #f0ead9; color: #23201a; }
+#expenseCancel:hover { background: #e3dcc9; }
 
 .expense-list, .balance-list, .settlement-list { list-style: none; padding: 0; margin: 0; }
 .expense-item {
@@ -88,6 +106,7 @@ button:active { transform: translateY(1px); }
 .expense-info .meta { color: #5d5747; font-size: 0.9rem; }
 .expense-item button { background: #f0ead9; color: #23201a; padding: 6px 10px; }
 .expense-item button:hover { background: #e3dcc9; }
+.expense-actions { display: flex; gap: 6px; }
 
 .balance-item, .settlement-item {
   padding: 8px; border-bottom: 1px dashed #e7e0cd;
@@ -96,6 +115,8 @@ button:active { transform: translateY(1px); }
 .balance-item:last-child, .settlement-item:last-child { border-bottom: none; }
 .plus { color: #176534; font-weight: 700; }
 .minus { color: #9c2b1f; font-weight: 700; }
+.lunas { color: #176534; font-weight: 700; }
+.balance-item .meta { color: #5d5747; font-size: 0.9rem; }
 .settlement-item { font-weight: 600; }
 
 .total-line { font-size: 1.05rem; font-variant-numeric: tabular-nums; }
@@ -105,4 +126,20 @@ button:active { transform: translateY(1px); }
 #btnCopy { width: 100%; margin-top: 12px; background: #176534; }
 #btnCopy:hover { background: #1c7a3d; }
 
+.result-actions { display: flex; gap: 8px; margin-top: 8px; }
+.btn-secondary {
+  flex: 1; background: #f0ead9; color: #23201a;
+  border: 1px solid #ddd5c3;
+}
+.btn-secondary:hover { background: #e3dcc9; }
+
 footer { text-align: center; color: #5d5747; }
+
+/* Cetak: hanya nota hasil yang keluar, form dan tombol disembunyikan. */
+@media print {
+  body { background: #fff; }
+  .container { max-width: none; padding: 0; }
+  form, button, footer, .data-warning, .copy-status { display: none !important; }
+  .card { border: none; padding: 0 0 16px; margin-bottom: 8px; }
+  .chip { border: none; background: none; padding-left: 0; }
+}
