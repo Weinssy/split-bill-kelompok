@@ -12,6 +12,7 @@ Coba langsung di browser: [weinssy.github.io/split-bill-kelompok](https://weinss
 
 - Tambah/hapus peserta patungan (nama duplikat ditolak, hapus peserta meminta konfirmasi dulu karena pengeluaran yang menyangkut dia ikut terhapus)
 - Catat pengeluaran: nama, jumlah (otomatis terformat pemisah ribuan saat mengetik), siapa yang membayar, dan **pilih siapa saja yang ikut dibagi** (tidak harus semua orang). Pilihan centang tidak ter-reset saat halaman digambar ulang
+- **Pembagian tidak rata dengan porsi**: tiap orang yang ikut dibagi bisa diberi porsi berbeda (mis. 2 untuk yang makan dobel, 0,5 untuk yang ikut setengah), bawaan tiap orang 1 porsi. Jatah dihitung sebanding dengan porsi dan dibulatkan adil sampai totalnya pas. Daftar pengeluaran dan ringkasan mencantumkan porsinya bila ada yang bukan 1
 - **Edit pengeluaran** yang salah ketik, tanpa harus hapus dan input ulang
 - Rincian per orang: sudah bayar berapa, jatah berapa, dan statusnya (kelebihan, kurang, atau lunas). Peserta bersaldo nol tetap ditampilkan
 - **Penyelesaian otomatis**: algoritma greedy mencocokkan penyeimbang terbesar lebih dulu, jadi jumlah transfer seminimal mungkin
@@ -66,7 +67,6 @@ split-bill-kelompok/
 
 ## Sengaja ditunda
 
-- Mode patungan tidak rata (porsi berbeda per orang)
 - Simpan beberapa acara patungan terpisah
 - Sinkron antar perangkat / akun
 - Bukti transfer

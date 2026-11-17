@@ -1,13 +1,83 @@
-// Logika inti (splitAmount, computeBalances, computeSettlements, computeDetails)
-// tidak menyentuh DOM supaya bisa diuji langsung di Node. Lihat module.exports
-// di bawah.
+// Logika inti (splitAmount, splitWeighted, computeBalances, computeSettlements,
+// computeDetails) tidak menyentuh DOM supaya bisa diuji langsung di Node.
+// Lihat module.exports di bawah.
 
 // Bagi amount rata ke count orang dalam rupiah bulat. Sisa pembagian diberikan
 // 1 rupiah ke orang-orang pertama supaya total bagian selalu sama dengan amount.
+// Fungsi ini dipertahankan untuk kompatibilitas; jalur hitung utama sekarang
+// memakai splitWeighted dengan semua porsi 1.
 function splitAmount(amount, count) {
   const base = Math.floor(amount / count);
   const remainder = amount - base * count;
   return Array.from({ length: count }, (_, i) => base + (i < remainder ? 1 : 0));
+}
+
+// Porsi efektif seorang peserta pada satu pengeluaran. Pengeluaran lama yang
+// disimpan sebelum fitur porsi ada tidak punya objek weights, jadi semua
+// porsinya dianggap 1. Pada data yang punya weights, porsi yang hilang untuk
+// seseorang juga dianggap 1, sedangkan porsi 0, negatif, atau bukan angka
+// berarti orang itu tidak mendapat jatah.
+function expenseWeight(expense, id) {
+  if (!expense.weights) return 1;
+  const raw = expense.weights[id];
+  if (raw === undefined) return 1;
+  return typeof raw === "number" && Number.isFinite(raw) && raw > 0 ? raw : 0;
+}
+
+// Daftar peserta yang ikut dibagi beserta porsinya, mengikuti urutan splitIds
+// dan hanya memuat id yang masih dikenal.
+function expenseEntries(expense, validIds) {
+  return expense.splitIds
+    .filter((id) => validIds.has(id))
+    .map((id) => ({ id, weight: expenseWeight(expense, id) }));
+}
+
+// Bagi amount sebanding dengan porsi (weight) tiap entri, dalam rupiah bulat.
+// Total hasil selalu persis amount: tiap jatah dibulatkan ke bawah dulu, lalu
+// sisa rupiah dibagikan satu per satu mengikuti sisa pecahan terbesar
+// (largest remainder) supaya adil; pecahan yang seri dipecah mengikuti urutan
+// entries. Bobot 0 mendapat jatah 0.
+function splitWeighted(amount, entries) {
+  const weights = entries.map((e) =>
+    typeof e.weight === "number" && Number.isFinite(e.weight) && e.weight > 0
+      ? e.weight
+      : 0
+  );
+  const totalWeight = weights.reduce((sum, w) => sum + w, 0);
+  if (entries.length === 0 || totalWeight <= 0) return entries.map(() => 0);
+  const exact = weights.map((w) => (amount * w) / totalWeight);
+  const shares = exact.map((x) => Math.floor(x));
+  let remainder = amount - shares.reduce((sum, s) => sum + s, 0);
+  const order = entries
+    .map((_, i) => i)
+    .sort((a, b) => {
+      const fracDiff = exact[b] - shares[b] - (exact[a] - shares[a]);
+      return fracDiff !== 0 ? fracDiff : a - b;
+    });
+  for (let k = 0; remainder > 0; k += 1) {
+    shares[order[k % order.length]] += 1;
+    remainder -= 1;
+  }
+  return shares;
+}
+
+// Tulis porsi dengan koma desimal gaya Indonesia: 0.5 menjadi "0,5".
+function formatWeight(weight) {
+  return String(weight).replace(".", ",");
+}
+
+// Rangkaian nama peserta yang ikut dibagi satu pengeluaran. Bila ada porsi
+// yang bukan 1, tiap nama diberi keterangan porsinya, mis.
+// "Andi (porsi 2), Budi (porsi 1), Cici (porsi 0,5)".
+function describeSplit(expense, nameOf) {
+  const weighted = expense.splitIds.some((id) => expenseWeight(expense, id) !== 1);
+  return expense.splitIds
+    .map((id) =>
+      weighted
+        ? `${nameOf(id)} (porsi ${formatWeight(expenseWeight(expense, id))})`
+        : nameOf(id)
+    )
+    .join(", ");
 }
 
 // Saldo = total yang dibayar - total bagian yang harus ditanggung.
@@ -15,16 +85,17 @@ function splitAmount(amount, count) {
 function computeBalances(people, expenses) {
   const balances = {};
   for (const person of people) balances[person.id] = 0;
+  const validIds = new Set(people.map((p) => p.id));
 
   for (const expense of expenses) {
     if (!(expense.payerId in balances)) continue;
     balances[expense.payerId] += expense.amount;
 
-    const targets = expense.splitIds.filter((id) => id in balances);
-    if (targets.length === 0) continue;
-    const shares = splitAmount(expense.amount, targets.length);
-    targets.forEach((id, i) => {
-      balances[id] -= shares[i];
+    const entries = expenseEntries(expense, validIds);
+    if (entries.length === 0) continue;
+    const shares = splitWeighted(expense.amount, entries);
+    entries.forEach((entry, i) => {
+      balances[entry.id] -= shares[i];
     });
   }
   return balances;
@@ -38,15 +109,16 @@ function computeDetails(people, expenses) {
     details[person.id] = { id: person.id, name: person.name, paid: 0, share: 0, balance: 0 };
   }
 
+  const validIds = new Set(people.map((p) => p.id));
   for (const expense of expenses) {
     if (!(expense.payerId in details)) continue;
     details[expense.payerId].paid += expense.amount;
 
-    const targets = expense.splitIds.filter((id) => id in details);
-    if (targets.length === 0) continue;
-    const shares = splitAmount(expense.amount, targets.length);
-    targets.forEach((id, i) => {
-      details[id].share += shares[i];
+    const entries = expenseEntries(expense, validIds);
+    if (entries.length === 0) continue;
+    const shares = splitWeighted(expense.amount, entries);
+    entries.forEach((entry, i) => {
+      details[entry.id].share += shares[i];
     });
   }
   for (const person of people) {
@@ -105,6 +177,11 @@ function parseAmountInput(text) {
 if (typeof module !== "undefined" && module.exports) {
   module.exports = {
     splitAmount,
+    splitWeighted,
+    expenseWeight,
+    expenseEntries,
+    formatWeight,
+    describeSplit,
     computeBalances,
     computeSettlements,
     computeDetails,
@@ -142,10 +219,16 @@ if (typeof document !== "undefined") {
   // supaya render ulang tidak membuang pilihan pengguna. Peserta yang sudah
   // ada dan peserta baru mulai dalam keadaan tercentang.
   let splitChecked = new Set(people.map((p) => p.id));
+  // Porsi tiap peserta di form pengeluaran, disimpan di state dengan alasan
+  // yang sama. Peserta yang tidak ada di peta ini porsinya 1.
+  let splitWeights = new Map();
+  const weightOf = (id) => (splitWeights.has(id) ? splitWeights.get(id) : 1);
   // Id pengeluaran yang sedang diedit, atau null saat form dalam mode tambah.
   let editingId = null;
   // Salinan status centang sebelum masuk mode edit, untuk tombol Batal.
   let splitCheckedBeforeEdit = null;
+  // Salinan status porsi sebelum masuk mode edit, untuk tombol Batal.
+  let splitWeightsBeforeEdit = null;
 
   const el = (id) => document.getElementById(id);
   const rupiah = (n) => "Rp" + groupThousands(Math.round(n));
@@ -164,6 +247,7 @@ if (typeof document !== "undefined") {
   function exitEditMode() {
     editingId = null;
     splitCheckedBeforeEdit = null;
+    splitWeightsBeforeEdit = null;
     el("expenseSubmit").textContent = "Tambah pengeluaran";
     el("expenseCancel").hidden = true;
     el("expenseError").textContent = "";
@@ -199,6 +283,7 @@ if (typeof document !== "undefined") {
           (e) => e.payerId !== person.id && !e.splitIds.includes(person.id)
         );
         splitChecked.delete(person.id);
+        splitWeights.delete(person.id);
         if (editingId !== null && !expenses.some((e) => e.id === editingId)) {
           exitEditMode();
           el("expenseForm").reset();
@@ -226,17 +311,34 @@ if (typeof document !== "undefined") {
     const splitList = el("splitList");
     splitList.innerHTML = "";
     for (const person of people) {
+      const row = document.createElement("div");
+      row.className = "split-row";
       const label = document.createElement("label");
       const box = document.createElement("input");
       box.type = "checkbox";
       box.value = person.id;
       box.checked = splitChecked.has(person.id);
+      const weight = document.createElement("input");
+      weight.type = "number";
+      weight.className = "split-weight";
+      weight.min = "0";
+      weight.step = "0.5";
+      weight.value = weightOf(person.id);
+      weight.disabled = !box.checked;
+      weight.dataset.personId = person.id;
+      weight.setAttribute("aria-label", `Porsi ${person.name}`);
       box.addEventListener("change", () => {
         if (box.checked) splitChecked.add(person.id);
         else splitChecked.delete(person.id);
+        weight.disabled = !box.checked;
+      });
+      weight.addEventListener("input", () => {
+        const parsed = parseFloat(weight.value);
+        splitWeights.set(person.id, Number.isFinite(parsed) ? parsed : 0);
       });
       label.append(box, document.createTextNode(person.name));
-      splitList.appendChild(label);
+      row.append(label, weight);
+      splitList.appendChild(row);
     }
 
     const expenseList = el("expenseList");
@@ -253,7 +355,7 @@ if (typeof document !== "undefined") {
       title.textContent = `${expense.desc} · ${rupiah(expense.amount)}`;
       const meta = document.createElement("div");
       meta.className = "meta";
-      meta.textContent = `Dibayar ${nameOf(expense.payerId)}, dibagi ke ${expense.splitIds.map(nameOf).join(", ")}`;
+      meta.textContent = `Dibayar ${nameOf(expense.payerId)}, dibagi ke ${describeSplit(expense, nameOf)}`;
       info.append(title, meta);
       const actions = document.createElement("div");
       actions.className = "expense-actions";
@@ -330,9 +432,11 @@ if (typeof document !== "undefined") {
     const nameOf = (id) => (people.find((p) => p.id === id) || {}).name || "?";
     const parts = [`Split Bill Kelompok\nTotal: ${rupiah(total)}`];
 
-    const expenseLines = expenses.map(
-      (e) => `• ${e.desc}: ${rupiah(e.amount)} (dibayar ${nameOf(e.payerId)})`
-    );
+    const expenseLines = expenses.map((e) => {
+      const weighted = e.splitIds.some((id) => expenseWeight(e, id) !== 1);
+      const splitText = weighted ? `, dibagi ke ${describeSplit(e, nameOf)}` : "";
+      return `• ${e.desc}: ${rupiah(e.amount)} (dibayar ${nameOf(e.payerId)}${splitText})`;
+    });
     parts.push(`Pengeluaran:\n${expenseLines.join("\n")}`);
 
     const detailLines = people.map((p) => {
@@ -358,8 +462,12 @@ if (typeof document !== "undefined") {
 
   function startEdit(expense) {
     splitCheckedBeforeEdit = new Set(splitChecked);
+    splitWeightsBeforeEdit = new Map(splitWeights);
     editingId = expense.id;
     splitChecked = new Set(expense.splitIds);
+    splitWeights = new Map(
+      expense.splitIds.map((id) => [id, expenseWeight(expense, id)])
+    );
     el("expenseDesc").value = expense.desc;
     el("expenseAmount").value = groupThousands(expense.amount);
     el("expenseError").textContent = "";
@@ -376,6 +484,7 @@ if (typeof document !== "undefined") {
     people = [];
     expenses = [];
     splitChecked = new Set();
+    splitWeights = new Map();
     dataCorrupted = false;
     exitEditMode();
     el("expenseForm").reset();
@@ -411,6 +520,7 @@ if (typeof document !== "undefined") {
 
   el("expenseCancel").addEventListener("click", () => {
     if (splitCheckedBeforeEdit) splitChecked = splitCheckedBeforeEdit;
+    if (splitWeightsBeforeEdit) splitWeights = splitWeightsBeforeEdit;
     exitEditMode();
     el("expenseForm").reset();
     render();
@@ -421,15 +531,32 @@ if (typeof document !== "undefined") {
     const desc = el("expenseDesc").value.trim();
     const amount = parseAmountInput(el("expenseAmount").value);
     const payerId = Number(el("expensePayer").value);
-    const splitIds = [...el("splitList").querySelectorAll("input:checked")].map((b) =>
-      Number(b.value)
-    );
+    const splitIds = [
+      ...el("splitList").querySelectorAll('input[type="checkbox"]:checked'),
+    ].map((b) => Number(b.value));
     if (!desc || !amount || !payerId) {
       el("expenseError").textContent = "Isi dulu nama pengeluaran, jumlah, dan pembayarnya.";
       return;
     }
     if (splitIds.length === 0) {
       el("expenseError").textContent = "Centang minimal satu orang untuk dibagi.";
+      return;
+    }
+    // Baca porsi dari input tiap peserta yang tercentang. Porsi yang kosong,
+    // bukan angka, atau negatif diperlakukan sebagai 0.
+    const weights = {};
+    let totalWeight = 0;
+    for (const input of el("splitList").querySelectorAll(".split-weight")) {
+      const id = Number(input.dataset.personId);
+      if (!splitIds.includes(id)) continue;
+      const parsed = parseFloat(input.value);
+      const w = Number.isFinite(parsed) && parsed > 0 ? parsed : 0;
+      weights[id] = w;
+      totalWeight += w;
+    }
+    if (totalWeight <= 0) {
+      el("expenseError").textContent =
+        "Total porsi orang yang dicentang masih 0. Isi porsi minimal satu orang.";
       return;
     }
     el("expenseError").textContent = "";
@@ -440,13 +567,16 @@ if (typeof document !== "undefined") {
         target.amount = amount;
         target.payerId = payerId;
         target.splitIds = splitIds;
+        target.weights = weights;
       }
       exitEditMode();
     } else {
-      expenses.push({ id: Date.now(), desc, amount, payerId, splitIds });
+      expenses.push({ id: Date.now(), desc, amount, payerId, splitIds, weights });
     }
     save();
     event.target.reset();
+    // Setelah tambah atau simpan berhasil, porsi kembali ke bawaan 1.
+    splitWeights = new Map();
     render();
   });
 
