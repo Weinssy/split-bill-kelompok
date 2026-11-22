@@ -1,0 +1,19 @@
+{
+  "name": "Split Bill Kelompok: Kalkulator Patungan",
+  "short_name": "Split Bill",
+  "description": "Kalkulator patungan dengan penyelesaian transfer minimal, porsi tidak rata, dan ekspor nota.",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#F6F4EF",
+  "theme_color": "#F6F4EF",
+  "lang": "id",
+  "icons": [
+    {
+      "src": "./icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    }
+  ]
+}

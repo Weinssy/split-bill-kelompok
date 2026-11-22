@@ -1,42 +1,33 @@
-// Logika inti (splitAmount, splitWeighted, computeBalances, computeSettlements,
-// computeDetails) tidak menyentuh DOM supaya bisa diuji langsung di Node.
-// Lihat module.exports di bawah.
+// Core logic functions avoid touching DOM so they can be tested directly in Node.
 
-// Bagi amount rata ke count orang dalam rupiah bulat. Sisa pembagian diberikan
-// 1 rupiah ke orang-orang pertama supaya total bagian selalu sama dengan amount.
-// Fungsi ini dipertahankan untuk kompatibilitas; jalur hitung utama sekarang
-// memakai splitWeighted dengan semua porsi 1.
 function splitAmount(amount, count) {
   const base = Math.floor(amount / count);
   const remainder = amount - base * count;
   return Array.from({ length: count }, (_, i) => base + (i < remainder ? 1 : 0));
 }
 
-// Porsi efektif seorang peserta pada satu pengeluaran. Pengeluaran lama yang
-// disimpan sebelum fitur porsi ada tidak punya objek weights, jadi semua
-// porsinya dianggap 1. Pada data yang punya weights, porsi yang hilang untuk
-// seseorang juga dianggap 1, sedangkan porsi 0, negatif, atau bukan angka
-// berarti orang itu tidak mendapat jatah.
+function computeNetAmount(subtotal, taxPercent = 0, discount = 0) {
+  const safeSub = Math.max(0, Math.round(Number(subtotal) || 0));
+  const safeTax = Math.max(0, Number(taxPercent) || 0);
+  const safeDisc = Math.max(0, Math.round(Number(discount) || 0));
+  return Math.max(0, Math.round(safeSub * (1 + safeTax / 100)) - safeDisc);
+}
+
+// Legacy expenses saved before weighted splits omit `weights` and default every share weight to 1.
 function expenseWeight(expense, id) {
   if (!expense.weights) return 1;
-  const raw = expense.weights[id];
+  const raw = Object.hasOwn(expense.weights, id) ? expense.weights[id] : undefined;
   if (raw === undefined) return 1;
   return typeof raw === "number" && Number.isFinite(raw) && raw > 0 ? raw : 0;
 }
 
-// Daftar peserta yang ikut dibagi beserta porsinya, mengikuti urutan splitIds
-// dan hanya memuat id yang masih dikenal.
 function expenseEntries(expense, validIds) {
   return expense.splitIds
     .filter((id) => validIds.has(id))
     .map((id) => ({ id, weight: expenseWeight(expense, id) }));
 }
 
-// Bagi amount sebanding dengan porsi (weight) tiap entri, dalam rupiah bulat.
-// Total hasil selalu persis amount: tiap jatah dibulatkan ke bawah dulu, lalu
-// sisa rupiah dibagikan satu per satu mengikuti sisa pecahan terbesar
-// (largest remainder) supaya adil; pecahan yang seri dipecah mengikuti urutan
-// entries. Bobot 0 mendapat jatah 0.
+// Distribute amount proportionally by weight using largest-remainder rounding so shares sum exactly to amount.
 function splitWeighted(amount, entries) {
   const weights = entries.map((e) =>
     typeof e.weight === "number" && Number.isFinite(e.weight) && e.weight > 0
@@ -50,7 +41,7 @@ function splitWeighted(amount, entries) {
   let remainder = amount - shares.reduce((sum, s) => sum + s, 0);
   const order = entries
     .map((_, i) => i)
-    .sort((a, b) => {
+    .toSorted((a, b) => {
       const fracDiff = exact[b] - shares[b] - (exact[a] - shares[a]);
       return fracDiff !== 0 ? fracDiff : a - b;
     });
@@ -61,14 +52,10 @@ function splitWeighted(amount, entries) {
   return shares;
 }
 
-// Tulis porsi dengan koma desimal gaya Indonesia: 0.5 menjadi "0,5".
 function formatWeight(weight) {
   return String(weight).replace(".", ",");
 }
 
-// Rangkaian nama peserta yang ikut dibagi satu pengeluaran. Bila ada porsi
-// yang bukan 1, tiap nama diberi keterangan porsinya, mis.
-// "Andi (porsi 2), Budi (porsi 1), Cici (porsi 0,5)".
 function describeSplit(expense, nameOf) {
   const weighted = expense.splitIds.some((id) => expenseWeight(expense, id) !== 1);
   return expense.splitIds
@@ -80,15 +67,13 @@ function describeSplit(expense, nameOf) {
     .join(", ");
 }
 
-// Saldo = total yang dibayar - total bagian yang harus ditanggung.
-// Positif berarti kelebihan bayar (berhak menerima), negatif berarti harus transfer.
 function computeBalances(people, expenses) {
   const balances = {};
   for (const person of people) balances[person.id] = 0;
   const validIds = new Set(people.map((p) => p.id));
 
   for (const expense of expenses) {
-    if (!(expense.payerId in balances)) continue;
+    if (!Object.hasOwn(balances, expense.payerId)) continue;
     balances[expense.payerId] += expense.amount;
 
     const entries = expenseEntries(expense, validIds);
@@ -101,8 +86,6 @@ function computeBalances(people, expenses) {
   return balances;
 }
 
-// Rincian per orang: berapa yang sudah dia bayar, berapa jatah yang dia
-// tanggung, dan saldonya (bayar - jatah). Konsisten dengan computeBalances.
 function computeDetails(people, expenses) {
   const details = {};
   for (const person of people) {
@@ -111,7 +94,7 @@ function computeDetails(people, expenses) {
 
   const validIds = new Set(people.map((p) => p.id));
   for (const expense of expenses) {
-    if (!(expense.payerId in details)) continue;
+    if (!Object.hasOwn(details, expense.payerId)) continue;
     details[expense.payerId].paid += expense.amount;
 
     const entries = expenseEntries(expense, validIds);
@@ -127,17 +110,16 @@ function computeDetails(people, expenses) {
   return details;
 }
 
-// Pasangkan penyeimbang terbesar lebih dulu (greedy) supaya jumlah transfer sedikit.
 function computeSettlements(people, balances) {
   const nameOf = (id) => (people.find((p) => p.id === id) || {}).name || "?";
   const debtors = people
     .filter((p) => balances[p.id] < 0)
     .map((p) => ({ id: p.id, amount: -balances[p.id] }))
-    .sort((a, b) => b.amount - a.amount);
+    .toSorted((a, b) => b.amount - a.amount);
   const creditors = people
     .filter((p) => balances[p.id] > 0)
     .map((p) => ({ id: p.id, amount: balances[p.id] }))
-    .sort((a, b) => b.amount - a.amount);
+    .toSorted((a, b) => b.amount - a.amount);
 
   const settlements = [];
   let d = 0;
@@ -161,22 +143,149 @@ function computeSettlements(people, balances) {
   return settlements;
 }
 
-// Kelompokkan digit dengan titik pemisah ribuan, gaya Indonesia.
-// Menerima string digit atau angka, mengembalikan string terformat.
+function settlementKey(settlement) {
+  return `${settlement.fromId}->${settlement.toId}:${settlement.amount}`;
+}
+
 function groupThousands(value) {
   const digits = String(value).replace(/\D/g, "");
   return digits.replace(/\B(?=(\d{3})+(?!\d))/g, ".");
 }
 
-// Ambil angka murni dari teks input jumlah (titik dan karakter lain dibuang).
 function parseAmountInput(text) {
   const digits = String(text).replace(/\D/g, "");
   return digits ? Number(digits) : 0;
 }
 
+function sanitizePeopleList(raw) {
+  if (!Array.isArray(raw)) return null;
+  const seenIds = new Set();
+  const clean = [];
+  for (const item of raw) {
+    if (!item || typeof item !== "object" || Array.isArray(item)) continue;
+    const id = Number(item.id);
+    const name = typeof item.name === "string" ? item.name.trim() : "";
+    if (!Number.isFinite(id) || !name || seenIds.has(id)) continue;
+    seenIds.add(id);
+    clean.push({ id, name });
+  }
+  return clean;
+}
+
+function sanitizeExpensesList(raw) {
+  if (!Array.isArray(raw)) return null;
+  const clean = [];
+  for (const item of raw) {
+    if (!item || typeof item !== "object" || Array.isArray(item)) continue;
+    const id = Number(item.id);
+    const desc = typeof item.desc === "string" ? item.desc.trim() : "";
+    const amount = Number(item.amount);
+    const payerId = Number(item.payerId);
+    if (
+      !Number.isFinite(id) ||
+      !desc ||
+      !Number.isFinite(amount) ||
+      amount <= 0 ||
+      !Number.isFinite(payerId) ||
+      !Array.isArray(item.splitIds)
+    ) {
+      continue;
+    }
+    const splitIds = item.splitIds.map(Number).filter(Number.isFinite);
+    if (splitIds.length === 0) continue;
+
+    let weights;
+    if (item.weights && typeof item.weights === "object" && !Array.isArray(item.weights)) {
+      weights = {};
+      for (const [k, v] of Object.entries(item.weights)) {
+        const w = Number(v);
+        if (Number.isFinite(w) && w >= 0) weights[k] = w;
+      }
+    }
+
+    const subtotalRaw = Number(item.subtotal);
+    const taxRaw = Number(item.taxPercent);
+    const discountRaw = Number(item.discount);
+    const entry = {
+      id,
+      desc,
+      amount: Math.round(amount),
+      payerId,
+      splitIds,
+    };
+    if (weights) entry.weights = weights;
+    if (Number.isFinite(subtotalRaw) && subtotalRaw > 0) entry.subtotal = Math.round(subtotalRaw);
+    if (Number.isFinite(taxRaw) && taxRaw > 0) entry.taxPercent = taxRaw;
+    if (Number.isFinite(discountRaw) && discountRaw > 0) entry.discount = Math.round(discountRaw);
+    clean.push(entry);
+  }
+  return clean;
+}
+
+function sanitizeSettledKeys(raw) {
+  if (!Array.isArray(raw)) return [];
+  return raw.filter((item) => typeof item === "string" && item.includes("->"));
+}
+
+function bytesToBase64Url(bytes) {
+  let binary = "";
+  const chunkSize = 0x8000;
+  for (let i = 0; i < bytes.length; i += chunkSize) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + chunkSize));
+  }
+  return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
+}
+
+function base64UrlToBytes(str) {
+  const padded = str.replace(/-/g, "+").replace(/_/g, "/") + "===".slice((str.length + 3) % 4);
+  const binary = atob(padded);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i += 1) {
+    bytes[i] = binary.charCodeAt(i);
+  }
+  return bytes;
+}
+
+function encodeSharePayload(state) {
+  const payload = {
+    app: "split-bill-kelompok",
+    v: 1,
+    title: typeof state.title === "string" ? state.title.trim() : "",
+    people: state.people || [],
+    expenses: state.expenses || [],
+    settled: state.settled || [],
+  };
+  const bytes = new TextEncoder().encode(JSON.stringify(payload));
+  return bytesToBase64Url(bytes);
+}
+
+function decodeSharePayload(encoded) {
+  if (typeof encoded !== "string" || !encoded.trim()) {
+    throw new Error("Tautan nota kosong.");
+  }
+  const bytes = base64UrlToBytes(encoded.trim());
+  const text = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+  const parsed = JSON.parse(text);
+  if (!parsed || typeof parsed !== "object" || parsed.app !== "split-bill-kelompok") {
+    throw new Error("Format tautan nota tidak dikenali.");
+  }
+  const people = sanitizePeopleList(parsed.people);
+  const expenses = sanitizeExpensesList(parsed.expenses);
+  if (people === null || expenses === null) {
+    throw new Error("Isi peserta atau pengeluaran pada tautan tidak valid.");
+  }
+  return {
+    title: typeof parsed.title === "string" ? parsed.title.trim() : "",
+    people,
+    expenses,
+    settled: sanitizeSettledKeys(parsed.settled),
+  };
+}
+
 if (typeof module !== "undefined" && module.exports) {
   module.exports = {
     splitAmount,
+    computeNetAmount,
     splitWeighted,
     expenseWeight,
     expenseEntries,
@@ -185,62 +294,162 @@ if (typeof module !== "undefined" && module.exports) {
     computeBalances,
     computeSettlements,
     computeDetails,
+    settlementKey,
     groupThousands,
     parseAmountInput,
+    sanitizePeopleList,
+    sanitizeExpensesList,
+    encodeSharePayload,
+    decodeSharePayload,
   };
 }
 
 if (typeof document !== "undefined") {
   const PEOPLE_KEY = "sb_people";
   const EXPENSES_KEY = "sb_expenses";
+  const TITLE_KEY = "sb_title";
+  const SETTLED_KEY = "sb_settled";
 
-  // Baca array dari localStorage dengan pengaman. JSON rusak atau bentuk data
-  // yang salah tidak boleh mematikan aplikasi: tandai sebagai rusak supaya UI
-  // bisa memperingatkan pengguna dan menawarkan pemulihan.
-  function loadArray(key) {
-    try {
-      const raw = localStorage.getItem(key);
-      if (raw === null) return { data: [], corrupted: false };
-      const parsed = JSON.parse(raw);
-      if (!Array.isArray(parsed)) return { data: [], corrupted: true };
-      return { data: parsed, corrupted: false };
-    } catch {
-      return { data: [], corrupted: true };
-    }
+  let idCounter = 0;
+  function generateId() {
+    idCounter += 1;
+    return Date.now() * 1000 + (idCounter % 1000);
   }
-
-  const loadedPeople = loadArray(PEOPLE_KEY);
-  const loadedExpenses = loadArray(EXPENSES_KEY);
-  let people = loadedPeople.data;
-  let expenses = loadedExpenses.data;
-  let dataCorrupted = loadedPeople.corrupted || loadedExpenses.corrupted;
-
-  // Status centang "dibagi untuk" disimpan di state, bukan dibaca dari DOM,
-  // supaya render ulang tidak membuang pilihan pengguna. Peserta yang sudah
-  // ada dan peserta baru mulai dalam keadaan tercentang.
-  let splitChecked = new Set(people.map((p) => p.id));
-  // Porsi tiap peserta di form pengeluaran, disimpan di state dengan alasan
-  // yang sama. Peserta yang tidak ada di peta ini porsinya 1.
-  let splitWeights = new Map();
-  const weightOf = (id) => (splitWeights.has(id) ? splitWeights.get(id) : 1);
-  // Id pengeluaran yang sedang diedit, atau null saat form dalam mode tambah.
-  let editingId = null;
-  // Salinan status centang sebelum masuk mode edit, untuk tombol Batal.
-  let splitCheckedBeforeEdit = null;
-  // Salinan status porsi sebelum masuk mode edit, untuk tombol Batal.
-  let splitWeightsBeforeEdit = null;
 
   const el = (id) => document.getElementById(id);
   const rupiah = (n) => "Rp" + groupThousands(Math.round(n));
 
+  function announce(message) {
+    const region = el("liveAnnouncer");
+    if (!region) return;
+    region.textContent = "";
+    setTimeout(() => {
+      region.textContent = message;
+    }, 50);
+  }
+
+  function loadStoredState() {
+    let corrupted = false;
+    let people = [];
+    let expenses = [];
+    let title = "";
+    let settled = new Set();
+
+    try {
+      const rawPeople = localStorage.getItem(PEOPLE_KEY);
+      if (rawPeople !== null) {
+        const parsed = sanitizePeopleList(JSON.parse(rawPeople));
+        if (parsed === null) corrupted = true;
+        else people = parsed;
+      }
+      const rawExpenses = localStorage.getItem(EXPENSES_KEY);
+      if (rawExpenses !== null) {
+        const parsed = sanitizeExpensesList(JSON.parse(rawExpenses));
+        if (parsed === null) corrupted = true;
+        else expenses = parsed;
+      }
+      title = localStorage.getItem(TITLE_KEY) || "";
+      const rawSettled = localStorage.getItem(SETTLED_KEY);
+      if (rawSettled !== null) {
+        settled = new Set(sanitizeSettledKeys(JSON.parse(rawSettled)));
+      }
+    } catch {
+      corrupted = true;
+    }
+
+    return { people, expenses, title, settled, corrupted };
+  }
+
+  const initial = loadStoredState();
+  let people = initial.people;
+  let expenses = initial.expenses;
+  let billTitle = initial.title;
+  let settledKeys = initial.settled;
+  let dataCorrupted = initial.corrupted;
+
+  // Store checkbox/weight choices in JS state so re-renders preserve in-progress form entries.
+  let splitChecked = new Set(people.map((p) => p.id));
+  let splitWeights = new Map();
+  const weightOf = (id) => (splitWeights.has(id) ? splitWeights.get(id) : 1);
+  let editingId = null;
+  let splitCheckedBeforeEdit = null;
+  let splitWeightsBeforeEdit = null;
+
+  function setStatus(message, isError = false) {
+    const statusEl = el("copyStatus");
+    statusEl.textContent = message;
+    statusEl.classList.toggle("is-error", isError);
+  }
+
   function save() {
-    localStorage.setItem(PEOPLE_KEY, JSON.stringify(people));
-    localStorage.setItem(EXPENSES_KEY, JSON.stringify(expenses));
-    // Data baru yang barusan disimpan menggantikan data rusak, jadi
-    // peringatan tidak perlu tampil lagi.
-    if (dataCorrupted) {
-      dataCorrupted = false;
-      el("dataWarning").hidden = true;
+    try {
+      localStorage.setItem(PEOPLE_KEY, JSON.stringify(people));
+      localStorage.setItem(EXPENSES_KEY, JSON.stringify(expenses));
+      localStorage.setItem(TITLE_KEY, billTitle);
+      localStorage.setItem(SETTLED_KEY, JSON.stringify([...settledKeys]));
+      if (dataCorrupted) {
+        dataCorrupted = false;
+        el("dataWarning").hidden = true;
+      }
+      return true;
+    } catch {
+      el("dataWarningText").textContent =
+        "Gagal menyimpan data ke penyimpanan browser. Periksa kuota atau izin situs.";
+      el("dataWarning").hidden = false;
+      return false;
+    }
+  }
+
+  function askConfirm({ title, message, confirmLabel = "Ya, lanjutkan", dangerous = false }) {
+    const dialog = el("confirmDialog");
+    if (!dialog || typeof dialog.showModal !== "function") {
+      return Promise.resolve(window.confirm(message));
+    }
+    el("confirmTitle").textContent = title;
+    el("confirmMessage").textContent = message;
+    const okBtn = el("confirmOkBtn");
+    okBtn.textContent = confirmLabel;
+    okBtn.className = dangerous ? "btn-danger" : "";
+    const { promise, resolve } = Promise.withResolvers();
+    dialog.addEventListener(
+      "close",
+      () => resolve(dialog.returnValue === "confirm"),
+      { once: true }
+    );
+    dialog.showModal();
+    return promise;
+  }
+
+  function setFieldError(input, errorEl, message) {
+    if (message) {
+      errorEl.textContent = message;
+      errorEl.hidden = false;
+      if (input) {
+        input.setAttribute("aria-invalid", "true");
+        input.setAttribute("aria-describedby", errorEl.id);
+      }
+    } else {
+      errorEl.textContent = "";
+      errorEl.hidden = true;
+      if (input) {
+        input.setAttribute("aria-invalid", "false");
+        input.removeAttribute("aria-describedby");
+      }
+    }
+  }
+
+  function updateNetPreview() {
+    const preview = el("expenseNetPreview");
+    const subtotal = parseAmountInput(el("expenseAmount").value);
+    const taxPercent = Math.max(0, Number(el("expenseTax").value) || 0);
+    const discount = parseAmountInput(el("expenseDiscount").value);
+    if (subtotal > 0 && (taxPercent > 0 || discount > 0)) {
+      const net = computeNetAmount(subtotal, taxPercent, discount);
+      preview.textContent = `Total akhir setelah penyesuaian: ${rupiah(net)}`;
+      preview.hidden = false;
+    } else {
+      preview.textContent = "";
+      preview.hidden = true;
     }
   }
 
@@ -250,26 +459,34 @@ if (typeof document !== "undefined") {
     splitWeightsBeforeEdit = null;
     el("expenseSubmit").textContent = "Tambah pengeluaran";
     el("expenseCancel").hidden = true;
-    el("expenseError").textContent = "";
+    setFieldError(null, el("expenseError"), "");
+    ["expenseDesc", "expenseAmount", "expensePayer"].forEach((id) => {
+      el(id).setAttribute("aria-invalid", "false");
+      el(id).removeAttribute("aria-describedby");
+    });
   }
 
   function render() {
     el("dataWarning").hidden = !dataCorrupted;
+    el("billTitle").value = billTitle;
+    el("printBillTitle").textContent = billTitle.trim() ? `Nota: ${billTitle.trim()}` : "";
 
     const personList = el("personList");
-    personList.innerHTML = "";
     el("personEmpty").style.display = people.length ? "none" : "block";
-    for (const person of people) {
+    const personItems = people.map((person) => {
       const li = document.createElement("li");
       li.className = "chip";
       const span = document.createElement("span");
       span.textContent = person.name;
       const del = document.createElement("button");
       del.type = "button";
-      del.textContent = "✕";
       del.setAttribute("aria-label", `Hapus peserta ${person.name}`);
-      del.title = "Hapus peserta (pengeluaran yang menyangkut dia ikut terhapus)";
-      del.addEventListener("click", () => {
+      const xIcon = document.createElement("span");
+      xIcon.setAttribute("aria-hidden", "true");
+      xIcon.textContent = "✕";
+      del.appendChild(xIcon);
+
+      del.addEventListener("click", async () => {
         const affected = expenses.filter(
           (e) => e.payerId === person.id || e.splitIds.includes(person.id)
         ).length;
@@ -277,7 +494,13 @@ if (typeof document !== "undefined") {
           affected > 0
             ? ` ${affected} pengeluaran yang menyangkut dia juga akan terhapus.`
             : "";
-        if (!window.confirm(`Hapus peserta ${person.name}?${detail}`)) return;
+        const ok = await askConfirm({
+          title: `Hapus peserta ${person.name}?`,
+          message: `Peserta akan dihapus dari daftar.${detail}`,
+          confirmLabel: "Hapus peserta",
+          dangerous: true,
+        });
+        if (!ok) return;
         people = people.filter((p) => p.id !== person.id);
         expenses = expenses.filter(
           (e) => e.payerId !== person.id && !e.splitIds.includes(person.id)
@@ -290,43 +513,53 @@ if (typeof document !== "undefined") {
         }
         save();
         render();
+        announce(`Peserta ${person.name} dihapus.`);
       });
+
       li.append(span, del);
-      personList.appendChild(li);
-    }
+      return li;
+    });
+    personList.replaceChildren(...personItems);
 
     const payerSelect = el("expensePayer");
     const previousPayer = payerSelect.value;
-    payerSelect.innerHTML = "";
-    for (const person of people) {
+    const payerOptions = people.map((person) => {
       const opt = document.createElement("option");
-      opt.value = person.id;
+      opt.value = String(person.id);
       opt.textContent = person.name;
-      payerSelect.appendChild(opt);
-    }
+      return opt;
+    });
+    payerSelect.replaceChildren(...payerOptions);
     if (people.some((p) => String(p.id) === previousPayer)) {
       payerSelect.value = previousPayer;
     }
 
     const splitList = el("splitList");
-    splitList.innerHTML = "";
-    for (const person of people) {
+    const splitRows = people.map((person) => {
       const row = document.createElement("div");
       row.className = "split-row";
-      const label = document.createElement("label");
+
       const box = document.createElement("input");
       box.type = "checkbox";
-      box.value = person.id;
+      box.id = `split-check-${person.id}`;
+      box.value = String(person.id);
       box.checked = splitChecked.has(person.id);
+
+      const label = document.createElement("label");
+      label.className = "split-check-label";
+      label.htmlFor = box.id;
+      label.textContent = person.name;
+
       const weight = document.createElement("input");
       weight.type = "number";
       weight.className = "split-weight";
       weight.min = "0";
       weight.step = "0.5";
-      weight.value = weightOf(person.id);
+      weight.value = String(weightOf(person.id));
       weight.disabled = !box.checked;
-      weight.dataset.personId = person.id;
+      weight.dataset.personId = String(person.id);
       weight.setAttribute("aria-label", `Porsi ${person.name}`);
+
       box.addEventListener("change", () => {
         if (box.checked) splitChecked.add(person.id);
         else splitChecked.delete(person.id);
@@ -336,27 +569,37 @@ if (typeof document !== "undefined") {
         const parsed = parseFloat(weight.value);
         splitWeights.set(person.id, Number.isFinite(parsed) ? parsed : 0);
       });
-      label.append(box, document.createTextNode(person.name));
-      row.append(label, weight);
-      splitList.appendChild(row);
-    }
+
+      row.append(box, label, weight);
+      return row;
+    });
+    splitList.replaceChildren(...splitRows);
+
+    const hasPeople = people.length > 0;
+    el("btnSplitAll").disabled = !hasPeople;
+    el("btnSplitNone").disabled = !hasPeople;
+    el("btnSplitEqual").disabled = !hasPeople;
 
     const expenseList = el("expenseList");
-    expenseList.innerHTML = "";
     el("expenseEmpty").style.display = expenses.length ? "none" : "block";
     const nameOf = (id) => (people.find((p) => p.id === id) || {}).name || "?";
-    // Penyimpanan tetap kronologis, tampilan saja yang dibalik: terbaru di atas.
-    for (const expense of [...expenses].reverse()) {
+    const expenseItems = expenses.toReversed().map((expense) => {
       const li = document.createElement("li");
       li.className = "expense-item";
+
       const info = document.createElement("div");
       info.className = "expense-info";
       const title = document.createElement("div");
       title.textContent = `${expense.desc} · ${rupiah(expense.amount)}`;
       const meta = document.createElement("div");
       meta.className = "meta";
-      meta.textContent = `Dibayar ${nameOf(expense.payerId)}, dibagi ke ${describeSplit(expense, nameOf)}`;
+      const extraParts = [];
+      if (expense.taxPercent > 0) extraParts.push(`pajak ${formatWeight(expense.taxPercent)}%`);
+      if (expense.discount > 0) extraParts.push(`diskon ${rupiah(expense.discount)}`);
+      const extraText = extraParts.length ? ` (${extraParts.join(", ")})` : "";
+      meta.textContent = `Dibayar ${nameOf(expense.payerId)}, dibagi ke ${describeSplit(expense, nameOf)}${extraText}`;
       info.append(title, meta);
+
       const actions = document.createElement("div");
       actions.className = "expense-actions";
       const edit = document.createElement("button");
@@ -364,6 +607,7 @@ if (typeof document !== "undefined") {
       edit.textContent = "Edit";
       edit.setAttribute("aria-label", `Edit pengeluaran ${expense.desc}`);
       edit.addEventListener("click", () => startEdit(expense));
+
       const del = document.createElement("button");
       del.type = "button";
       del.textContent = "Hapus";
@@ -376,11 +620,14 @@ if (typeof document !== "undefined") {
         }
         save();
         render();
+        announce(`Pengeluaran ${expense.desc} dihapus.`);
       });
+
       actions.append(edit, del);
       li.append(info, actions);
-      expenseList.appendChild(li);
-    }
+      return li;
+    });
+    expenseList.replaceChildren(...expenseItems);
 
     const total = expenses.reduce((sum, e) => sum + e.amount, 0);
     el("totalAmount").textContent = rupiah(total);
@@ -388,8 +635,7 @@ if (typeof document !== "undefined") {
     const balances = computeBalances(people, expenses);
     const details = computeDetails(people, expenses);
     const balanceList = el("balanceList");
-    balanceList.innerHTML = "";
-    for (const person of people) {
+    const balanceItems = people.map((person) => {
       const d = details[person.id];
       const li = document.createElement("li");
       li.className = "balance-item";
@@ -411,26 +657,73 @@ if (typeof document !== "undefined") {
       meta.className = "meta";
       meta.textContent = `Sudah bayar ${rupiah(d.paid)}, jatah ${rupiah(d.share)}`;
       li.append(head, meta);
-      balanceList.appendChild(li);
-    }
+      return li;
+    });
+    balanceList.replaceChildren(...balanceItems);
 
     const settlements = computeSettlements(people, balances);
-    const settlementList = el("settlementList");
-    settlementList.innerHTML = "";
-    el("settlementEmpty").style.display = settlements.length ? "none" : "block";
-    for (const s of settlements) {
-      const li = document.createElement("li");
-      li.className = "settlement-item";
-      li.textContent = `${s.from} → ${s.to}: ${rupiah(s.amount)}`;
-      settlementList.appendChild(li);
+    const validSettlementKeys = new Set(settlements.map(settlementKey));
+    let settledPruned = false;
+    for (const key of settledKeys) {
+      if (!validSettlementKeys.has(key)) {
+        settledKeys.delete(key);
+        settledPruned = true;
+      }
     }
-    el("btnCopy").dataset.summary = buildSummary(people, expenses, details, settlements, total);
+    if (settledPruned) save();
+
+    const settlementList = el("settlementList");
+    el("settlementEmpty").style.display = settlements.length ? "none" : "block";
+    const settlementItems = settlements.map((s) => {
+      const key = settlementKey(s);
+      const isSettled = settledKeys.has(key);
+      const li = document.createElement("li");
+      li.className = "settlement-item" + (isSettled ? " is-settled" : "");
+
+      const textSpan = document.createElement("span");
+      textSpan.className = "settlement-text";
+      textSpan.textContent = `${s.from} → ${s.to}: ${rupiah(s.amount)}`;
+
+      const toggleLabel = document.createElement("label");
+      toggleLabel.className = "settlement-toggle";
+      const checkbox = document.createElement("input");
+      checkbox.type = "checkbox";
+      checkbox.checked = isSettled;
+      checkbox.setAttribute("aria-label", `Tandai transfer ${s.from} ke ${s.to} ${rupiah(s.amount)} lunas`);
+      checkbox.addEventListener("change", () => {
+        if (checkbox.checked) settledKeys.add(key);
+        else settledKeys.delete(key);
+        save();
+        render();
+      });
+      const toggleText = document.createElement("span");
+      toggleText.textContent = isSettled ? "Lunas" : "Tandai lunas";
+      toggleLabel.append(checkbox, toggleText);
+
+      li.append(textSpan, toggleLabel);
+      return li;
+    });
+    settlementList.replaceChildren(...settlementItems);
+
+    el("btnCopy").dataset.summary = buildSummary(
+      people,
+      expenses,
+      details,
+      settlements,
+      total,
+      settledKeys,
+      billTitle
+    );
+    updateNetPreview();
   }
 
-  function buildSummary(people, expenses, details, settlements, total) {
+  function buildSummary(people, expenses, details, settlements, total, settledSet, title) {
     if (!expenses.length) return "";
     const nameOf = (id) => (people.find((p) => p.id === id) || {}).name || "?";
-    const parts = [`Split Bill Kelompok\nTotal: ${rupiah(total)}`];
+    const header = title.trim()
+      ? `Split Bill Kelompok: ${title.trim()}\nTotal: ${rupiah(total)}`
+      : `Split Bill Kelompok\nTotal: ${rupiah(total)}`;
+    const parts = [header];
 
     const expenseLines = expenses.map((e) => {
       const weighted = e.splitIds.some((id) => expenseWeight(e, id) !== 1);
@@ -452,7 +745,10 @@ if (typeof document !== "undefined") {
     parts.push(`Rincian per orang:\n${detailLines.join("\n")}`);
 
     if (settlements.length) {
-      const lines = settlements.map((s) => `• ${s.from} → ${s.to}: ${rupiah(s.amount)}`);
+      const lines = settlements.map((s) => {
+        const done = settledSet.has(settlementKey(s)) ? " [Lunas]" : "";
+        return `• ${s.from} → ${s.to}: ${rupiah(s.amount)}${done}`;
+      });
       parts.push(`Siapa transfer ke siapa:\n${lines.join("\n")}`);
     } else {
       parts.push("Siapa transfer ke siapa:\nTidak ada, semua sudah lunas.");
@@ -469,20 +765,75 @@ if (typeof document !== "undefined") {
       expense.splitIds.map((id) => [id, expenseWeight(expense, id)])
     );
     el("expenseDesc").value = expense.desc;
-    el("expenseAmount").value = groupThousands(expense.amount);
-    el("expenseError").textContent = "";
+    el("expenseAmount").value = groupThousands(expense.subtotal || expense.amount);
+    el("expenseTax").value = String(expense.taxPercent || 0);
+    el("expenseDiscount").value = groupThousands(expense.discount || 0);
+    if ((expense.taxPercent || 0) > 0 || (expense.discount || 0) > 0) {
+      el("extraChargeDetails").open = true;
+    }
     el("expenseSubmit").textContent = "Simpan perubahan";
     el("expenseCancel").hidden = false;
+    setFieldError(null, el("expenseError"), "");
     render();
     el("expensePayer").value = String(expense.payerId);
     el("expenseDesc").focus();
   }
 
+  el("billTitle").addEventListener("input", (event) => {
+    billTitle = event.target.value;
+    save();
+    el("printBillTitle").textContent = billTitle.trim() ? `Nota: ${billTitle.trim()}` : "";
+    const total = expenses.reduce((sum, e) => sum + e.amount, 0);
+    const balances = computeBalances(people, expenses);
+    const details = computeDetails(people, expenses);
+    const settlements = computeSettlements(people, balances);
+    el("btnCopy").dataset.summary = buildSummary(
+      people,
+      expenses,
+      details,
+      settlements,
+      total,
+      settledKeys,
+      billTitle
+    );
+  });
+
+  el("btnNewBill").addEventListener("click", async () => {
+    if (people.length === 0 && expenses.length === 0 && !billTitle.trim()) {
+      setStatus("Nota sudah kosong.");
+      return;
+    }
+    const ok = await askConfirm({
+      title: "Mulai nota baru?",
+      message: "Semua peserta, pengeluaran, dan tanda lunas pada nota saat ini akan dikosongkan.",
+      confirmLabel: "Mulai nota baru",
+      dangerous: true,
+    });
+    if (!ok) return;
+    people = [];
+    expenses = [];
+    billTitle = "";
+    settledKeys = new Set();
+    splitChecked = new Set();
+    splitWeights = new Map();
+    exitEditMode();
+    el("expenseForm").reset();
+    el("personForm").reset();
+    save();
+    render();
+    setStatus("Nota baru dimulai.");
+    announce("Nota baru dimulai.");
+  });
+
   el("btnClearCorrupt").addEventListener("click", () => {
     localStorage.removeItem(PEOPLE_KEY);
     localStorage.removeItem(EXPENSES_KEY);
+    localStorage.removeItem(TITLE_KEY);
+    localStorage.removeItem(SETTLED_KEY);
     people = [];
     expenses = [];
+    billTitle = "";
+    settledKeys = new Set();
     splitChecked = new Set();
     splitWeights = new Map();
     dataCorrupted = false;
@@ -494,28 +845,75 @@ if (typeof document !== "undefined") {
 
   el("personForm").addEventListener("submit", (event) => {
     event.preventDefault();
-    const name = el("personName").value.trim();
-    if (!name) return;
+    const input = el("personName");
+    const errEl = el("personError");
+    const name = input.value.trim();
+    if (!name) {
+      setFieldError(input, errEl, "Isi dulu nama peserta.");
+      input.focus();
+      return;
+    }
     const duplicate = people.some(
       (p) => p.name.trim().toLowerCase() === name.toLowerCase()
     );
     if (duplicate) {
-      el("personError").textContent = `Nama ${name} sudah ada di daftar peserta. Pakai nama yang berbeda.`;
+      setFieldError(
+        input,
+        errEl,
+        `Nama ${name} sudah ada di daftar peserta. Pakai nama yang berbeda.`
+      );
+      input.focus();
       return;
     }
-    el("personError").textContent = "";
-    const person = { id: Date.now(), name };
+    setFieldError(input, errEl, "");
+    const person = { id: generateId(), name };
     people.push(person);
     splitChecked.add(person.id);
     save();
     render();
     event.target.reset();
+    input.focus();
+    announce(`Peserta ${name} ditambahkan.`);
   });
 
-  // Format angka saat mengetik: 1500000 tampil sebagai 1.500.000.
+  el("personName").addEventListener("input", () => {
+    setFieldError(el("personName"), el("personError"), "");
+  });
+
   el("expenseAmount").addEventListener("input", (event) => {
     const digits = event.target.value.replace(/\D/g, "");
     event.target.value = digits ? groupThousands(digits) : "";
+    el("expenseAmount").setAttribute("aria-invalid", "false");
+    updateNetPreview();
+  });
+
+  el("expenseTax").addEventListener("input", updateNetPreview);
+
+  el("expenseDiscount").addEventListener("input", (event) => {
+    const digits = event.target.value.replace(/\D/g, "");
+    event.target.value = digits ? groupThousands(digits) : "0";
+    updateNetPreview();
+  });
+
+  ["expenseDesc", "expensePayer"].forEach((id) => {
+    el(id).addEventListener("input", () => {
+      el(id).setAttribute("aria-invalid", "false");
+    });
+  });
+
+  el("btnSplitAll").addEventListener("click", () => {
+    splitChecked = new Set(people.map((p) => p.id));
+    render();
+  });
+
+  el("btnSplitNone").addEventListener("click", () => {
+    splitChecked = new Set();
+    render();
+  });
+
+  el("btnSplitEqual").addEventListener("click", () => {
+    splitWeights = new Map();
+    render();
   });
 
   el("expenseCancel").addEventListener("click", () => {
@@ -523,27 +921,52 @@ if (typeof document !== "undefined") {
     if (splitWeightsBeforeEdit) splitWeights = splitWeightsBeforeEdit;
     exitEditMode();
     el("expenseForm").reset();
+    el("extraChargeDetails").open = false;
     render();
   });
 
   el("expenseForm").addEventListener("submit", (event) => {
     event.preventDefault();
-    const desc = el("expenseDesc").value.trim();
-    const amount = parseAmountInput(el("expenseAmount").value);
-    const payerId = Number(el("expensePayer").value);
+    const descInput = el("expenseDesc");
+    const amountInput = el("expenseAmount");
+    const payerSelect = el("expensePayer");
+    const errEl = el("expenseError");
+
+    const desc = descInput.value.trim();
+    const subtotal = parseAmountInput(amountInput.value);
+    const taxPercent = Math.max(0, Number(el("expenseTax").value) || 0);
+    const discount = parseAmountInput(el("expenseDiscount").value);
+    const amount = computeNetAmount(subtotal, taxPercent, discount);
+    const payerId = Number(payerSelect.value);
     const splitIds = [
       ...el("splitList").querySelectorAll('input[type="checkbox"]:checked'),
     ].map((b) => Number(b.value));
-    if (!desc || !amount || !payerId) {
-      el("expenseError").textContent = "Isi dulu nama pengeluaran, jumlah, dan pembayarnya.";
+
+    if (!desc) {
+      setFieldError(descInput, errEl, "Isi dulu nama pengeluaran.");
+      descInput.focus();
+      return;
+    }
+    if (!subtotal) {
+      setFieldError(amountInput, errEl, "Isi jumlah pengeluaran dengan nominal lebih dari 0.");
+      amountInput.focus();
+      return;
+    }
+    if (!payerId) {
+      setFieldError(payerSelect, errEl, "Tambahkan peserta dulu dan pilih pembayarnya.");
+      payerSelect.focus();
+      return;
+    }
+    if (amount <= 0) {
+      setFieldError(amountInput, errEl, "Total akhir setelah diskon tidak boleh 0 atau kurang.");
+      amountInput.focus();
       return;
     }
     if (splitIds.length === 0) {
-      el("expenseError").textContent = "Centang minimal satu orang untuk dibagi.";
+      setFieldError(null, errEl, "Centang minimal satu orang untuk dibagi.");
       return;
     }
-    // Baca porsi dari input tiap peserta yang tercentang. Porsi yang kosong,
-    // bukan angka, atau negatif diperlakukan sebagai 0.
+
     const weights = {};
     let totalWeight = 0;
     for (const input of el("splitList").querySelectorAll(".split-weight")) {
@@ -555,49 +978,80 @@ if (typeof document !== "undefined") {
       totalWeight += w;
     }
     if (totalWeight <= 0) {
-      el("expenseError").textContent =
-        "Total porsi orang yang dicentang masih 0. Isi porsi minimal satu orang.";
+      setFieldError(
+        null,
+        errEl,
+        "Total porsi orang yang dicentang masih 0. Isi porsi minimal satu orang."
+      );
       return;
     }
-    el("expenseError").textContent = "";
+
+    setFieldError(null, errEl, "");
+    const payload = { id: editingId !== null ? editingId : generateId(), desc, amount, payerId, splitIds, weights };
+    if (taxPercent > 0 || discount > 0) {
+      payload.subtotal = subtotal;
+      if (taxPercent > 0) payload.taxPercent = taxPercent;
+      if (discount > 0) payload.discount = discount;
+    }
+
     if (editingId !== null) {
-      const target = expenses.find((e) => e.id === editingId);
-      if (target) {
-        target.desc = desc;
-        target.amount = amount;
-        target.payerId = payerId;
-        target.splitIds = splitIds;
-        target.weights = weights;
-      }
+      const idx = expenses.findIndex((e) => e.id === editingId);
+      if (idx >= 0) expenses[idx] = payload;
       exitEditMode();
+      announce(`Pengeluaran ${desc} diperbarui.`);
     } else {
-      expenses.push({ id: Date.now(), desc, amount, payerId, splitIds, weights });
+      expenses.push(payload);
+      announce(`Pengeluaran ${desc} ditambahkan.`);
     }
     save();
     event.target.reset();
-    // Setelah tambah atau simpan berhasil, porsi kembali ke bawaan 1.
+    el("expenseDiscount").value = "0";
+    el("expenseTax").value = "0";
+    el("extraChargeDetails").open = false;
     splitWeights = new Map();
     render();
+    descInput.focus();
   });
 
   el("btnCopy").addEventListener("click", async () => {
     const summary = el("btnCopy").dataset.summary;
     if (!summary) {
-      el("copyStatus").textContent = "Belum ada hitungan untuk disalin.";
+      setStatus("Belum ada hitungan untuk disalin.", true);
       return;
     }
     try {
       await navigator.clipboard.writeText(summary);
-      el("copyStatus").textContent = "Ringkasan tersalin. Tinggal tempel ke WhatsApp.";
+      setStatus("Ringkasan tersalin. Tinggal tempel ke WhatsApp.");
     } catch {
-      el("copyStatus").textContent = "Gagal menyalin otomatis. Salin manual dari daftar di atas.";
+      setStatus("Gagal menyalin otomatis. Salin manual dari daftar di atas.", true);
+    }
+  });
+
+  el("btnShareLink").addEventListener("click", async () => {
+    if (people.length === 0 && expenses.length === 0) {
+      setStatus("Belum ada data nota untuk dibagikan.", true);
+      return;
+    }
+    try {
+      const encoded = encodeSharePayload({
+        title: billTitle,
+        people,
+        expenses,
+        settled: [...settledKeys],
+      });
+      const url = new URL(window.location.href);
+      url.hash = `data=${encoded}`;
+      await navigator.clipboard.writeText(url.toString());
+      setStatus("Link nota tersalin. Siap dibagikan ke teman.");
+    } catch {
+      setStatus("Gagal menyalin link nota secara otomatis.", true);
     }
   });
 
   el("btnDownload").addEventListener("click", () => {
     const summary = el("btnCopy").dataset.summary;
     if (!summary) {
-      el("copyStatus").textContent = "Belum ada hitungan untuk diunduh.";
+      setStatus("Belum ada hitungan untuk diunduh.", true);
       return;
     }
     const blob = new Blob([summary], { type: "text/plain;charset=utf-8" });
@@ -609,12 +1063,119 @@ if (typeof document !== "undefined") {
     link.click();
     link.remove();
     URL.revokeObjectURL(url);
-    el("copyStatus").textContent = "Ringkasan diunduh sebagai berkas teks.";
+    setStatus("Ringkasan diunduh sebagai berkas teks.");
   });
 
   el("btnPrint").addEventListener("click", () => {
     window.print();
   });
 
+  el("btnExportJson").addEventListener("click", () => {
+    const payload = {
+      app: "split-bill-kelompok",
+      schemaVersion: 1,
+      exportedAt: new Date().toISOString(),
+      data: {
+        title: billTitle,
+        people,
+        expenses,
+        settled: [...settledKeys],
+      },
+    };
+    const blob = new Blob([JSON.stringify(payload, null, 2)], {
+      type: "application/json",
+    });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = "split-bill-backup.json";
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(url);
+    setStatus(`Cadangan JSON diekspor (${people.length} peserta, ${expenses.length} pengeluaran).`);
+  });
+
+  el("btnImportJson").addEventListener("click", () => {
+    el("importJsonInput").value = "";
+    el("importJsonInput").click();
+  });
+
+  el("importJsonInput").addEventListener("change", async (event) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    try {
+      const parsed = JSON.parse(await file.text());
+      if (!parsed || typeof parsed !== "object" || parsed.app !== "split-bill-kelompok" || !parsed.data) {
+        throw new Error("Format berkas bukan cadangan Split Bill Kelompok.");
+      }
+      const nextPeople = sanitizePeopleList(parsed.data.people);
+      const nextExpenses = sanitizeExpensesList(parsed.data.expenses);
+      if (nextPeople === null || nextExpenses === null) {
+        throw new Error("Data peserta atau pengeluaran di dalam berkas tidak valid.");
+      }
+      people = nextPeople;
+      expenses = nextExpenses;
+      billTitle = typeof parsed.data.title === "string" ? parsed.data.title.trim() : "";
+      settledKeys = new Set(sanitizeSettledKeys(parsed.data.settled));
+      splitChecked = new Set(people.map((p) => p.id));
+      splitWeights = new Map();
+      exitEditMode();
+      save();
+      render();
+      setStatus(`Nota dipulihkan: ${people.length} peserta dan ${expenses.length} pengeluaran.`);
+    } catch (err) {
+      setStatus(
+        err instanceof Error ? `Gagal mengimpor JSON: ${err.message}` : "Gagal mengimpor JSON.",
+        true
+      );
+    }
+  });
+
+  async function checkSharedHash() {
+    const hash = window.location.hash;
+    if (!hash.startsWith("#data=")) return;
+    try {
+      const shared = decodeSharePayload(hash.slice(6));
+      const hasExisting = people.length > 0 || expenses.length > 0;
+      if (hasExisting) {
+        const ok = await askConfirm({
+          title: "Muat nota dari tautan?",
+          message:
+            "Browser ini sudah menyimpan hitungan patungan lain. Muat nota dari tautan dan ganti data saat ini?",
+          confirmLabel: "Muat nota tautan",
+          dangerous: false,
+        });
+        if (!ok) {
+          history.replaceState(null, "", window.location.pathname + window.location.search);
+          return;
+        }
+      }
+      people = shared.people;
+      expenses = shared.expenses;
+      billTitle = shared.title;
+      settledKeys = new Set(shared.settled);
+      splitChecked = new Set(people.map((p) => p.id));
+      splitWeights = new Map();
+      exitEditMode();
+      save();
+      render();
+      history.replaceState(null, "", window.location.pathname + window.location.search);
+      setStatus("Nota dari tautan berhasil dimuat.");
+    } catch {
+      setStatus("Tautan nota rusak atau tidak valid.", true);
+    }
+  }
+
+  function registerServiceWorker() {
+    if (!("serviceWorker" in navigator)) return;
+    const isLocalHost =
+      window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1";
+    if (window.location.protocol !== "https:" && !isLocalHost) return;
+    navigator.serviceWorker.register("./sw.js").catch(() => {});
+  }
+
   render();
+  checkSharedHash();
+  registerServiceWorker();
 }
